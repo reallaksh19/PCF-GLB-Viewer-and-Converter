@@ -98,7 +98,7 @@ export const DEFAULT_VIEWER3D_CONFIG = {
       max: 1.9,
     },
     annotations: {
-      messageSquareEnabled: true,
+      messageSquareEnabled: false,
     },
   },
   componentGeometry: {
@@ -247,8 +247,8 @@ export const DEFAULT_VIEWER3D_CONFIG = {
   lengthLabels: {
     enabled: false,
     precision: 1,
-    maxLabels: 500,
-    minWorldGap: 90,
+    maxLabels: 9999,
+    minWorldGap: 30,
     offsetScale: 1,
   },
   heatmap: {
@@ -293,5 +293,44 @@ export const DEFAULT_VIEWER3D_CONFIG = {
       fileName: 'STEAM_SISO - Copy.pcf',
       pcfText: '',
     },
+  },
+};
+
+export const THEME_PALETTES = {
+  NavisDark: {
+    PIPE:     '#38bdf8',
+    FLANGE:   '#fb923c',
+    VALVE:    '#4ade80',
+    TEE:      '#facc15',
+    ELBOW:    '#c084fc',
+    BEND:     '#c084fc',
+    REDUCER:  '#f472b6',
+    SUPPORT:  '#34d399',
+    ANCI:     '#f87171',
+    UNKNOWN:  '#94a3b8',
+  },
+  HighContrast: {
+    PIPE:     '#00e5ff',
+    FLANGE:   '#ff6d00',
+    VALVE:    '#00e676',
+    TEE:      '#ffea00',
+    ELBOW:    '#d500f9',
+    BEND:     '#d500f9',
+    REDUCER:  '#ff4081',
+    SUPPORT:  '#69ff47',
+    ANCI:     '#ff1744',
+    UNKNOWN:  '#b0bec5',
+  },
+  DrawLight: {
+    PIPE:     '#1565c0',
+    FLANGE:   '#bf360c',
+    VALVE:    '#1b5e20',
+    TEE:      '#e65100',
+    ELBOW:    '#4a148c',
+    BEND:     '#4a148c',
+    REDUCER:  '#880e4f',
+    SUPPORT:  '#004d40',
+    ANCI:     '#b71c1c',
+    UNKNOWN:  '#546e7a',
   },
 };

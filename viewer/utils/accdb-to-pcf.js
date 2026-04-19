@@ -283,9 +283,9 @@ function _classifyComponent(row) {
 
 function _supportNameFromType(type = '') {
   const t = String(type).toUpperCase();
-  if (/(^|[^A-Z0-9])(RIGID\s+)?ANC(HOR)?([^A-Z0-9]|$)|\bFIXED\b/.test(t)) return 'ANC';
-  if (/\bGDE\b|\bGUI\b|GUIDE|SLIDE|SLID/.test(t)) return 'GDE';
-  if (/\bRST\b|\bREST\b|\+Y\s*(SUPPORT|RESTRAINT)\b|\bY\s*(SUPPORT|RESTRAINT)\b|\+Y\b/.test(t)) return 'RST';
+  if (/(^|[^A-Z0-9])(RIGID\s+)?ANC(HOR)?([^A-Z0-9]|$)|\bFIXED\b/.test(t)) return 'ANCHOR';
+  if (/\bGDE\b|\bGUI\b|GUIDE|SLIDE|SLID/.test(t)) return 'GUIDE';
+  if (/\bRST\b|\bREST\b|\+Y\s*(SUPPORT|RESTRAINT)\b|\bY\s*(SUPPORT|RESTRAINT)\b|\+Y\b/.test(t)) return 'REST';
   return null;
 }
 
@@ -297,10 +297,10 @@ function _extractSupportBlockCode(text = '') {
 function _supportKindFromBlock(blockCode = '', description = '') {
   const code = String(blockCode).toUpperCase();
   const desc = String(description).toUpperCase();
-  if (code === 'CA100') return 'GDE';
-  if (code === 'CA150' || code === 'CA250') return 'RST';
-  if (/GUIDE|SLIDE|LATERAL/.test(desc)) return 'GDE';
-  if (/REST|\+Y|ANCHOR/.test(desc)) return 'RST';
+  if (code === 'CA100') return 'GUIDE';
+  if (code === 'CA150' || code === 'CA250') return 'REST';
+  if (/GUIDE|SLIDE|LATERAL/.test(desc)) return 'GUIDE';
+  if (/REST|\+Y|ANCHOR/.test(desc)) return 'REST';
   return null;
 }
 
@@ -312,9 +312,9 @@ function _supportNameFromDofs(text = '') {
     .map(v => Math.trunc(v));
   if (!dofs.length) return null;
   const unique = [...new Set(dofs)];
-  if (unique.length >= 6) return 'ANC';
-  if (unique.length === 1 && unique[0] === 2) return 'RST';
-  if (unique.every(v => v === 1 || v === 3) && unique.length >= 1) return 'GDE';
+  if (unique.length >= 6) return 'ANCHOR';
+  if (unique.length === 1 && unique[0] === 2) return 'REST';
+  if (unique.every(v => v === 1 || v === 3) && unique.length >= 1) return 'GUIDE';
   return null;
 }
 
@@ -332,8 +332,8 @@ function _supportNameFromAxisCosines(text = '') {
   // Restraint semantics follow CAESAR DOF conventions where +Y is gravity-rest.
   // Keep this classification in CAESAR space (do not apply render-axis remap here).
   const verticalness = Math.abs(y) / len;
-  if (verticalness > 0.75) return 'RST';
-  if (Math.max(Math.abs(x), Math.abs(z)) / len > 0.75) return 'GDE';
+  if (verticalness > 0.75) return 'REST';
+  if (Math.max(Math.abs(x), Math.abs(z)) / len > 0.75) return 'GUIDE';
   return null;
 }
 
@@ -368,6 +368,7 @@ export function normalizeToPCFWithContinuity(csvRows, options = {}) {
   nodePos.set(first.FROM_NODE, { x: 0, y: 0, z: 0 });
 
   // Resolve node positions from FROM/TO + deltas using iterative continuity pass.
+  // The backward pass (!a && b) handles reversed connections (e.g. 30→20 where 20 is known).
   let progress = true;
   let guard = 0;
   while (progress && guard < csvRows.length * 4) {
@@ -385,6 +386,40 @@ export function normalizeToPCFWithContinuity(csvRows, options = {}) {
       } else if (!a && b) {
         nodePos.set(r.FROM_NODE, { x: b.x - dx, y: b.y - dy, z: b.z - dz });
         progress = true;
+      }
+    }
+  }
+
+  // Multi-island seeding: find FROM_NODEs that are island roots (never a TO_NODE)
+  // and still unresolved after the main pass. Seed each at an offset past existing
+  // resolved nodes, then re-run the continuity pass for that island.
+  {
+    const toNodeSet = new Set(csvRows.map(r => r.TO_NODE));
+    const unresolvedRoots = [...new Set(
+      csvRows
+        .filter(r => !toNodeSet.has(r.FROM_NODE) && !nodePos.has(r.FROM_NODE))
+        .map(r => r.FROM_NODE)
+    )];
+
+    for (const rootNode of unresolvedRoots) {
+      const vals = [...nodePos.values()];
+      const maxX = vals.length ? Math.max(...vals.map(p => p.x)) : 0;
+      nodePos.set(rootNode, { x: maxX + 3000, y: 0, z: 0 });
+
+      let ip = true;
+      let ig = 0;
+      while (ip && ig < csvRows.length * 4) {
+        ig++;
+        ip = false;
+        for (const r of csvRows) {
+          const a = nodePos.get(r.FROM_NODE);
+          const b = nodePos.get(r.TO_NODE);
+          const dx = Number(r.DELTA_X || 0);
+          const dy = Number(r.DELTA_Y || 0);
+          const dz = Number(r.DELTA_Z || 0);
+          if (a && !b) { nodePos.set(r.TO_NODE,   { x: a.x+dx, y: a.y+dy, z: a.z+dz }); ip = true; }
+          else if (!a && b) { nodePos.set(r.FROM_NODE, { x: b.x-dx, y: b.y-dy, z: b.z-dz }); ip = true; }
+        }
       }
     }
   }
@@ -530,7 +565,14 @@ export function normalizeToPCFWithContinuity(csvRows, options = {}) {
         SUPPORT_GUID: `UCI:${supportNode}`,
         SUPPORT_COORDS: supportCoords,
         SUPPORT_DOFS: r.RST_DOFS || '',
-        AXIS_COSINES: r.RST_AXIS_COSINES || '',
+        AXIS_COSINES: (() => {
+          if (r.RST_AXIS_COSINES) return r.RST_AXIS_COSINES;
+          const d = Number(String(r.RST_DOFS || '').split(/[,\s]/)[0]);
+          if (d === 1) return '1, 0, 0';
+          if (d === 2) return '0, 1, 0';
+          if (d === 3) return '0, 0, 1';
+          return '';
+        })(),
         PIPE_AXIS_COSINES: `${r.DELTA_X || 0}, ${r.DELTA_Y || 0}, ${r.DELTA_Z || 0}`,
         SKEY: '',
       });
