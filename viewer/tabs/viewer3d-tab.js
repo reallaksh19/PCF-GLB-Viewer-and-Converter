@@ -158,16 +158,14 @@ export function renderViewer3D(container) {
               ${showMockButtons ? '<button class="btn-secondary" id="viewer3d-load-mock1" title="Load seeded localhost mock data set 1">Mock 1</button>' : ''}
               ${showMockButtons ? '<button class="btn-secondary" id="viewer3d-load-mock2" title="Load seeded localhost mock data set 2">Mock 2</button>' : ''}
               ${showMockButtons ? '<button class="btn-secondary" id="viewer3d-load-mock-xml" title="Load Mock XML data">Mock xml</button>' : ''}
-              <label class="btn-icon viewer3d-icon-btn viewer3d-mini-icon-btn viewer3d-spare-upload" title="Load Spare 1 Data">
-                <input type="file" id="viewer3d-spare1-input" accept=".csv,text/csv" style="display:none">
+              <button class="btn-icon viewer3d-icon-btn viewer3d-mini-icon-btn viewer3d-spare-upload" id="viewer3d-spare1-btn" title="Load Spare 1 Data" type="button">
                 <span class="viewer3d-icon-glyph">${SPARE_ICON_UPLOAD}</span>
                 <span class="viewer3d-icon-label">Spare 1</span>
-              </label>
-              <label class="btn-icon viewer3d-icon-btn viewer3d-mini-icon-btn viewer3d-spare-upload" title="Load Spare 2 Data">
-                <input type="file" id="viewer3d-spare2-input" accept=".csv,text/csv" style="display:none">
+              </button>
+              <button class="btn-icon viewer3d-icon-btn viewer3d-mini-icon-btn viewer3d-spare-upload" id="viewer3d-spare2-btn" title="Load Spare 2 Data" type="button">
                 <span class="viewer3d-icon-glyph">${SPARE_ICON_UPLOAD}</span>
                 <span class="viewer3d-icon-label">Spare 2</span>
-              </label>
+              </button>
               <label class="btn-secondary file-label">
                 <input type="file" id="viewer3d-pcf-input" accept=".pcf,.PCF" style="display:none">
                 Load .PCF
@@ -257,6 +255,9 @@ export function renderViewer3D(container) {
                   <input type="checkbox" id="viewer3d-top-length-enabled" ${cfg.lengthLabels?.enabled ? 'checked' : ''} ${addOnDisabledAttr}>
                   Length
                 </label>
+                <label class="left-panel-label">Min gap (mm)
+                  <input type="number" id="viewer3d-label-min-gap" class="left-panel-number" min="0" max="2000" step="10" value="${cfg.lengthLabels?.minWorldGap ?? 30}" ${addOnDisabledAttr}>
+                </label>
                 <label class="left-panel-label">Overlay Scale
                   <input id="viewer3d-overlay-scale" class="left-panel-range" type="range" min="20" max="300" step="5" value="${Math.round(Number(cfg.overlay?.smartScale?.multiplier || 1) * 100)}" ${addOnDisabledAttr}>
                   <span class="left-panel-range-readout mono" id="viewer3d-overlay-scale-value">${Number(cfg.overlay?.smartScale?.multiplier || 1).toFixed(2)}x</span>
@@ -294,6 +295,13 @@ export function renderViewer3D(container) {
                     <option value="Y" ${String(cfg.coordinateMap?.verticalAxis || 'Z') === 'Y' ? 'selected' : ''}>Y-up</option>
                   </select>
                 </label>
+                <label class="left-panel-label">Theme
+                  <select id="viewer3d-theme-select" ${addOnDisabledAttr}>
+                    <option value="NavisDark" ${(state.viewerSettings?.themePreset || 'NavisDark') === 'NavisDark' ? 'selected' : ''}>Dark (Navy)</option>
+                    <option value="HighContrast" ${(state.viewerSettings?.themePreset) === 'HighContrast' ? 'selected' : ''}>High Contrast</option>
+                    <option value="DrawLight" ${(state.viewerSettings?.themePreset) === 'DrawLight' ? 'selected' : ''}>Light</option>
+                  </select>
+                </label>
               </div>
             </div>
           </aside>
@@ -321,6 +329,32 @@ export function renderViewer3D(container) {
           <span class="status-title">3D Viewer</span>
           <span class="status-separator"></span>
           <span class="status-message">${_esc(statusMessage)}</span>
+        </div>
+      </div>
+    </div>
+    <div id="viewer3d-spare-modal" style="display:none; position:fixed; inset:0; background:rgba(3,9,18,0.62); z-index:1200; padding:32px; overflow:auto;">
+      <div style="max-width:640px; margin:0 auto; background:#f5f8fc; border-radius:16px; box-shadow:0 24px 60px rgba(0,0,0,0.3); border:1px solid rgba(14,28,45,0.16);">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid rgba(14,28,45,0.12);">
+          <strong id="viewer3d-spare-modal-title" style="font-size:1rem; color:#102033;">Spare 1 — Import CSV</strong>
+          <button class="btn-secondary" id="viewer3d-spare-modal-close" type="button">Close</button>
+        </div>
+        <div style="padding:18px 20px 24px;">
+          <label class="btn-secondary file-label" style="margin-bottom:12px; display:inline-block;">
+            <input type="file" id="viewer3d-spare-modal-file" accept=".csv,text/csv" style="display:none">
+            Choose CSV file…
+          </label>
+          <div id="viewer3d-spare-modal-preview" style="overflow-x:auto; margin-bottom:12px; font-size:0.8rem;"></div>
+          <p style="font-size:0.78rem; color:#555; margin-bottom:12px;">
+            Each CSV row must have columns matching existing component coordinates (mm).
+            Rows are matched to the nearest pipe endpoint within 180 mm. The selected column
+            value is displayed as a label on the canvas.
+          </p>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <label style="font-size:0.85rem;">Show column:
+              <select id="viewer3d-spare-modal-field" style="margin-left:6px;"></select>
+            </label>
+            <button class="btn-primary" id="viewer3d-spare-modal-apply" type="button" disabled>Apply</button>
+          </div>
         </div>
       </div>
     </div>
@@ -576,48 +610,86 @@ function _wireViewerControls(container, cfg, actions) {
       event.target.value = '';
     }
   });
-  const loadSpareCsv = async (event, spareKey) => {
+  // Spare modal state
+  let _spareModalKey = 'spare1';
+  let _spareModalParsed = null;
+  const spareModal = container.querySelector('#viewer3d-spare-modal');
+  const spareModalTitle = container.querySelector('#viewer3d-spare-modal-title');
+  const spareModalFile = container.querySelector('#viewer3d-spare-modal-file');
+  const spareModalPreview = container.querySelector('#viewer3d-spare-modal-preview');
+  const spareModalFieldSel = container.querySelector('#viewer3d-spare-modal-field');
+  const spareModalApply = container.querySelector('#viewer3d-spare-modal-apply');
+
+  const openSpareModal = (spareKey) => {
+    _spareModalKey = spareKey;
+    _spareModalParsed = null;
+    if (spareModalTitle) spareModalTitle.textContent = `${spareKey === 'spare1' ? 'Spare 1' : 'Spare 2'} — Import CSV`;
+    if (spareModalPreview) spareModalPreview.innerHTML = '';
+    if (spareModalFieldSel) spareModalFieldSel.innerHTML = '';
+    if (spareModalApply) spareModalApply.disabled = true;
+    if (spareModalFile) spareModalFile.value = '';
+    if (spareModal) spareModal.style.display = 'block';
+  };
+  const closeSpareModal = () => { if (spareModal) spareModal.style.display = 'none'; };
+
+  container.querySelector('#viewer3d-spare1-btn')?.addEventListener('click', () => openSpareModal('spare1'));
+  container.querySelector('#viewer3d-spare2-btn')?.addEventListener('click', () => openSpareModal('spare2'));
+  container.querySelector('#viewer3d-spare-modal-close')?.addEventListener('click', closeSpareModal);
+  spareModal?.addEventListener('click', (e) => { if (e.target === spareModal) closeSpareModal(); });
+
+  spareModalFile?.addEventListener('change', async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
       const text = await file.text();
       const parsed = _parseSpareCsvData(text);
-      _spareOverlayRuntime[spareKey] = {
-        rows: parsed.rows,
-        fields: parsed.fields,
-        fileName: file.name,
-      };
-      if (!state.viewer3DConfig.spareOverlays) {
-        state.viewer3DConfig.spareOverlays = {
-          spare1: { enabled: false, selectedField: '' },
-          spare2: { enabled: false, selectedField: '' },
-          snapToNearest: true,
-          snapToleranceMm: 180,
-        };
+      _spareModalParsed = { ...parsed, fileName: file.name };
+      // Preview: first 5 rows as table
+      if (spareModalPreview) {
+        const cols = parsed.fields.slice(0, 8);
+        const rows = parsed.rows.slice(0, 5);
+        spareModalPreview.innerHTML = `<table style="border-collapse:collapse;width:100%"><thead><tr>${
+          cols.map(c => `<th style="border:1px solid #ccc;padding:2px 6px;background:#e8edf3;font-size:0.75rem">${_esc(c)}</th>`).join('')
+        }</tr></thead><tbody>${
+          rows.map(r => `<tr>${cols.map(c => `<td style="border:1px solid #e0e0e0;padding:2px 6px;font-size:0.75rem">${_esc(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('')
+        }</tbody></table><p style="font-size:0.75rem;color:#666;margin-top:4px">${parsed.rows.length} row(s)</p>`;
       }
-      if (!state.viewer3DConfig.spareOverlays[spareKey]) {
-        state.viewer3DConfig.spareOverlays[spareKey] = { enabled: false, selectedField: '' };
+      // Populate field dropdown
+      if (spareModalFieldSel) {
+        spareModalFieldSel.innerHTML = parsed.fields
+          .map(f => `<option value="${_escAttr(f)}">${_esc(f)}</option>`).join('');
       }
-      state.viewer3DConfig.spareOverlays[spareKey].enabled = true;
-      state.viewer3DConfig.spareOverlays[spareKey].selectedField = _resolvePreferredSpareField(
-        state.viewer3DConfig.spareOverlays[spareKey].selectedField,
-        parsed.fields,
-      );
-      saveStickyState();
-      _setStatusMessage(container, `${spareKey === 'spare1' ? 'Spare 1' : 'Spare 2'} loaded: ${parsed.rows.length} mapped row(s) from ${file.name}.`);
-      emit('viewer3d-config-changed', { source: 'viewer3d-tab', reason: `${spareKey}-loaded` });
-    } catch (error) {
-      console.error(error);
-      alert(`Failed to load ${spareKey}: ${String(error?.message || error)}`);
-    } finally {
-      event.target.value = '';
+      if (spareModalApply) spareModalApply.disabled = false;
+    } catch (err) {
+      console.error(err);
+      if (spareModalPreview) spareModalPreview.innerHTML = `<p style="color:red">Parse error: ${_esc(String(err?.message || err))}</p>`;
+      if (spareModalApply) spareModalApply.disabled = true;
     }
-  };
-  container.querySelector('#viewer3d-spare1-input')?.addEventListener('change', async (event) => {
-    await loadSpareCsv(event, 'spare1');
   });
-  container.querySelector('#viewer3d-spare2-input')?.addEventListener('change', async (event) => {
-    await loadSpareCsv(event, 'spare2');
+
+  spareModalApply?.addEventListener('click', () => {
+    if (!_spareModalParsed) return;
+    const spareKey = _spareModalKey;
+    const parsed = _spareModalParsed;
+    const selectedField = spareModalFieldSel?.value || parsed.fields[0] || '';
+    _spareOverlayRuntime[spareKey] = { rows: parsed.rows, fields: parsed.fields, fileName: parsed.fileName };
+    if (!state.viewer3DConfig.spareOverlays) {
+      state.viewer3DConfig.spareOverlays = {
+        spare1: { enabled: false, selectedField: '' },
+        spare2: { enabled: false, selectedField: '' },
+        snapToNearest: true,
+        snapToleranceMm: 180,
+      };
+    }
+    if (!state.viewer3DConfig.spareOverlays[spareKey]) {
+      state.viewer3DConfig.spareOverlays[spareKey] = { enabled: false, selectedField: '' };
+    }
+    state.viewer3DConfig.spareOverlays[spareKey].enabled = true;
+    state.viewer3DConfig.spareOverlays[spareKey].selectedField = selectedField;
+    saveStickyState();
+    _setStatusMessage(container, `${spareKey === 'spare1' ? 'Spare 1' : 'Spare 2'} loaded: ${parsed.rows.length} mapped row(s) from ${parsed.fileName}.`);
+    emit('viewer3d-config-changed', { source: 'viewer3d-tab', reason: `${spareKey}-updated` });
+    closeSpareModal();
   });
   container.querySelector('#viewer3d-import-raw-input')?.addEventListener('change', async (event) => {
     const file = event.target.files?.[0];
@@ -726,6 +798,21 @@ function _wireViewerControls(container, cfg, actions) {
     state.viewer3DConfig.lengthLabels.enabled = !!e.target.checked;
     saveStickyState();
     emit('viewer3d-config-changed', { source: 'viewer3d-tab', reason: 'length-labels-toggled' });
+  });
+  container.querySelector('#viewer3d-label-min-gap')?.addEventListener('change', (e) => {
+    const v = Number(e.target.value);
+    if (Number.isFinite(v) && v >= 0) {
+      if (!state.viewer3DConfig.lengthLabels) state.viewer3DConfig.lengthLabels = {};
+      state.viewer3DConfig.lengthLabels.minWorldGap = v;
+      saveStickyState();
+      emit('viewer3d-config-changed', { source: 'viewer3d-tab', reason: 'length-labels-toggled' });
+    }
+  });
+  container.querySelector('#viewer3d-theme-select')?.addEventListener('change', (e) => {
+    if (!state.viewerSettings) state.viewerSettings = {};
+    state.viewerSettings.themePreset = e.target.value;
+    saveStickyState();
+    emit('viewer3d-config-changed', { source: 'viewer3d-tab', reason: 'theme-changed' });
   });
   const overlayScale = container.querySelector('#viewer3d-overlay-scale');
   const overlayScaleValue = container.querySelector('#viewer3d-overlay-scale-value');

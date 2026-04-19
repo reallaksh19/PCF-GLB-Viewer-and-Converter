@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { state } from './core/state.js';
+import { THEME_PALETTES } from './viewer-3d-defaults.js';
 
 let CURRENT_VERTICAL_AXIS = 'Z';
 
@@ -399,6 +400,7 @@ export class PcfViewer3D {
         const themeKey = this.viewerConfig?.scene?.themePreset || state.viewerSettings.themePreset || 'NavisDark';
         const themeBg = themeKey === 'DrawLight' ? 0xf7f8fb
             : themeKey === 'DrawDark' ? 0x0b1220
+            : themeKey === 'HighContrast' ? 0x000000
             : 0x0f172a;
         const background = String(this.viewerConfig?.scene?.background || 'auto').toLowerCase() === 'auto'
             ? themeBg
@@ -468,6 +470,7 @@ export class PcfViewer3D {
         this.setNavMode('select');
         // C3: Refresh clipping planes on every orbit/pan so geometry never disappears
         this.controls.addEventListener('change', () => {
+            this._needsRender = true;
             this._emitTrace('orbit-change', { target: this.controls?.target?.toArray?.() || [] });
             if (this._componentGroup) {
                 const box = new THREE.Box3().setFromObject(this._componentGroup);
@@ -543,6 +546,7 @@ export class PcfViewer3D {
         this._bindInteractions();
 
         // Start render loop
+        this._needsRender = true;
         this._animate();
     }
 
@@ -550,8 +554,11 @@ export class PcfViewer3D {
     _animate() {
         this._animId = requestAnimationFrame(() => this._animate());
         if (this.controls) this.controls.update();
-        this.renderer.render(this.scene, this.camera);
-        if (this._css2dRenderer) this._css2dRenderer.render(this.scene, this.camera);
+        if (this._needsRender) {
+            this.renderer.render(this.scene, this.camera);
+            if (this._css2dRenderer) this._css2dRenderer.render(this.scene, this.camera);
+            this._needsRender = false;
+        }
         this._applyOverlaySmartScale();
         this._syncViewCube();
         this._syncAxisGizmo();
@@ -1384,6 +1391,7 @@ export class PcfViewer3D {
     }
 
     _queueOverlayRefresh(rebuild = false) {
+        this._needsRender = true;
         if (rebuild) this._overlayNeedsRebuild = true;
         if (this._overlayRaf) return;
         this._overlayRaf = requestAnimationFrame(() => {
@@ -1742,9 +1750,10 @@ export class PcfViewer3D {
         const explicitRest = /\bRST\b|\bREST\b|\+Y\s*(SUPPORT|RESTRAINT)\b|\bY\s*(SUPPORT|RESTRAINT)\b|\+Y\b/.test(supportText);
         const supportDofs = _dofsFromText(attrs.SUPPORT_DOFS || attrs['SUPPORT-DOFS'] || '');
         const dofSet = new Set(supportDofs);
-        const dofRest = dofSet.size === 1 && dofSet.has(2);
+        const vertDOF  = CURRENT_VERTICAL_AXIS === 'Z' ? 3 : 2;
+        const dofRest  = dofSet.size === 1 && dofSet.has(vertDOF);
         const dofAnchor = dofSet.size >= 6;
-        const dofGuide = dofSet.size > 0 && [...dofSet].every(v => v === 1 || v === 3);
+        const dofGuide = dofSet.size > 0 && [...dofSet].every(v => v !== vertDOF);
         const axisSemanticKind = _semanticSupportKindFromAxisCosinesText(attrs.AXIS_COSINES || attrs['AXIS-COSINES'] || '');
         if (dofAnchor) supportKind = 'ANCHOR';
         else if (dofRest) supportKind = 'REST';
@@ -2244,7 +2253,12 @@ export class PcfViewer3D {
     }
 
     _resolvePalette() {
+        const themeKey = this.viewerConfig?.scene?.themePreset || state.viewerSettings?.themePreset || 'NavisDark';
+        const themePalette = THEME_PALETTES[themeKey] || THEME_PALETTES.NavisDark;
         const palette = { ...COLORS };
+        for (const [k, hex] of Object.entries(themePalette)) {
+            palette[k.toUpperCase()] = Number.parseInt(hex.slice(1), 16);
+        }
         const cfgPalette = this.viewerConfig?.palette || {};
         for (const [k, v] of Object.entries(cfgPalette)) {
             if (typeof v === 'number') {
@@ -2738,12 +2752,6 @@ export class PcfViewer3D {
                 tries += 1;
             }
             if (!screenPoint || screenPoint.z < -1.05 || screenPoint.z > 1.05) continue;
-            const stillScreenOverlap = placedScreens.some((p) => {
-                const dx = p.x - screenPoint.x;
-                const dy = p.y - screenPoint.y;
-                return (dx * dx) + (dy * dy) < (minScreenGap * minScreenGap);
-            });
-            if (stillScreenOverlap) continue;
             placedPositions.push(candidate.clone());
             placedScreens.push(screenPoint);
             rows.push({
@@ -2893,6 +2901,7 @@ export class PcfViewer3D {
         });
 
         if (this.renderer) {
+            this.renderer.forceContextLoss?.();
             this.renderer.dispose();
             if (this.renderer.domElement?.parentNode === this.container) {
                 this.container.removeChild(this.renderer.domElement);
